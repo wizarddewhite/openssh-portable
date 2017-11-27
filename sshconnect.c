@@ -61,6 +61,7 @@
 #include "monitor_fdpass.h"
 #include "ssh2.h"
 #include "version.h"
+#include "obfuscate.h"
 #include "authfile.h"
 #include "ssherr.h"
 #include "authfd.h"
@@ -250,6 +251,12 @@ ssh_proxy_connect(const char *host, u_short port, const char *proxy_command)
 
 	/* Set the connection file descriptors. */
 	packet_set_connection(pout[0], pin[1]);
+
+	if(options.obfuscate_handshake) {
+   		if(options.obfuscate_keyword)
+      			obfuscate_set_keyword(options.obfuscate_keyword);
+		sshpkt_enable_obfuscation();
+	}
 
 	/* Indicate OK return */
 	return 0;
@@ -499,6 +506,12 @@ ssh_connect_direct(const char *host, struct addrinfo *aitop,
 	/* Set the connection. */
 	packet_set_connection(sock, sock);
 
+	if(options.obfuscate_handshake) {
+		if(options.obfuscate_keyword)
+			obfuscate_set_keyword(options.obfuscate_keyword);
+		sshpkt_enable_obfuscation();
+	}
+
 	return 0;
 }
 
@@ -523,17 +536,28 @@ ssh_connect(const char *host, struct addrinfo *addrs,
 static void
 send_client_banner(int connection_out, int minor1)
 {
+	char buf[256]; //XXX hack necessary for 6.2 upwards
+	u_int sendlen;
 	/* Send our own protocol version identification. */
 	if (compat20) {
-		xasprintf(&client_version_string, "SSH-%d.%d-%.100s\r\n",
+		snprintf(buf, sizeof buf, "SSH-%d.%d-%.100s\r\n",
 		    PROTOCOL_MAJOR_2, PROTOCOL_MINOR_2, SSH_VERSION);
 	} else {
-		xasprintf(&client_version_string, "SSH-%d.%d-%.100s\n",
+		snprintf(buf, sizeof buf, "SSH-%d.%d-%.100s\n",
 		    PROTOCOL_MAJOR_1, minor1, SSH_VERSION);
 	}
+	client_version_string = xstrdup(buf);
+	sendlen = strlen(client_version_string);
+	if(options.obfuscate_handshake)
+		obfuscate_output(client_version_string, sendlen);
 	if (atomicio(vwrite, connection_out, client_version_string,
-	    strlen(client_version_string)) != strlen(client_version_string))
+	    sendlen) != sendlen)
 		fatal("write: %.100s", strerror(errno));
+	if(options.obfuscate_handshake) {
+		free(client_version_string);
+		client_version_string = strdup(buf);
+	}
+	memset(buf, 0, sizeof(buf));
 	chop(client_version_string);
 	debug("Local version string %.100s", client_version_string);
 }
@@ -599,6 +623,8 @@ ssh_exchange_identification(int timeout_ms)
 			else if (len != 1)
 				fatal("ssh_exchange_identification: "
 				    "read: %.100s", strerror(errno));
+			if(options.obfuscate_handshake)
+				obfuscate_input(&buf[i], 1);
 			if (buf[i] == '\r') {
 				buf[i] = '\n';
 				buf[i + 1] = 0;
@@ -1368,6 +1394,9 @@ ssh_login(Sensitive *sensitive, const char *orighost,
 	/* Convert the user-supplied hostname into all lowercase. */
 	host = xstrdup(orighost);
 	lowercase(host);
+
+	if(options.obfuscate_handshake)
+		obfuscate_send_seed(packet_get_connection_out());
 
 	/* Exchange protocol version identification strings with the server. */
 	ssh_exchange_identification(timeout_ms);

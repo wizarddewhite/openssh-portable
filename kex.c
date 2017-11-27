@@ -376,9 +376,12 @@ kex_send_newkeys(struct ssh *ssh)
 	debug("SSH2_MSG_NEWKEYS sent");
 	debug("expecting SSH2_MSG_NEWKEYS");
 	ssh_dispatch_set(ssh, SSH2_MSG_NEWKEYS, &kex_input_newkeys);
-	if (ssh->kex->ext_info_c)
+	if (ssh->kex->ext_info_c) {
+		sshpkt_disable_obfuscation();
 		if ((r = kex_send_ext_info(ssh)) != 0)
 			return r;
+		sshpkt_enable_obfuscation();
+	}
 	return 0;
 }
 
@@ -441,6 +444,7 @@ kex_input_newkeys(int type, u_int32_t seq, void *ctxt)
 	kex->flags &= ~KEX_INIT_SENT;
 	free(kex->name);
 	kex->name = NULL;
+	sshpkt_disable_obfuscation();
 	return 0;
 }
 
